@@ -1,5 +1,11 @@
 /*
 DINSync clock module: clock in->x24 out
+
+IN clock: 
+out 3: Gate out (run/stop switch quantized to in clock)
+out 6: x24 out 
+
+CV2 (aka slip): Run/stop gate in
 */
 
 #include <avr/io.h>
@@ -14,12 +20,11 @@ DINSync clock module: clock in->x24 out
 #define MIN_ADC_DRIFT 1
 #define USER_INPUT_POLL_TIME 100
 
-
 /**MNEMONICS**/
 #define CLKIN 0
+#define INTERNAL 3
 //1 is x1
 //2 is x24
-#define INTERNAL 3
 
 /** PINS **/
 
@@ -30,12 +35,6 @@ DINSync clock module: clock in->x24 out
 #define CLOCK_LED_pin PD3
 #define CLOCK_LED_init DDRD |=(1<<CLOCK_LED_pin)
 #define CLOCK_LED_PORT PORTD
-
-#define DEBUG_pin PD1
-#define DEBUG_init DDRD|=(1<<DEBUG_pin)
-#define DEBUGHIGH PORTD |= (1<<DEBUG_pin)
-#define DEBUGLOW PORTD &= ~(1<<DEBUG_pin)
-#define DEBUGFLIP PORTD ^= (1<<DEBUG_pin)
 
 #define OUT_PORT1 PORTB
 #define OUT_DDR1 DDRB
@@ -55,7 +54,9 @@ DINSync clock module: clock in->x24 out
 
 #define SWITCHES_PULLUP PORTD |= ((1<<PD4) | (1<<PD5))
 
-#define RESYNC (PINC & (1<<PC4))
+#define STARTSTOP_pin PC1
+#define STARTSTOP_init DDRC &= ~(1<<STARTSTOP_pin)
+#define STARTSTOP_IN (PINC & (1<<STARTSTOP_pin))
 
 /** MACROS **/
 
@@ -164,7 +165,9 @@ int main(void){
 
 	uint32_t now=0;
 
-	char resync_up=0;
+	char startstop_up=0;
+	char clockin_up=0;
+	char ready_to_start_flag=0;
 
 	uint8_t min_pw=MIN_PW;
 	
@@ -173,31 +176,40 @@ int main(void){
 
 	CLOCK_IN_init; 
 	CLOCK_LED_init;
-	DEBUG_init;
 	OUT_init1;
 	OUT_init2;
-	BREAKOUT_init; 
-
+	BREAKOUT_init;  //??? rm this line ????
+	STARTSTOP_init;
 	pcint_init();
 
 	while(1){
 
-		if (RESYNC){
-			if (resync_up==0){
-				resync_up=1;
-				
-				p1=0;p24=0;
-				ON(OUT_PORT1,0);
-				ON(OUT_PORT1,5);
-
+		if (STARTSTOP_IN){
+			if (startstop_up==0){
+				startstop_up=1;
+				ready_to_start_flag=1;
 			}
-		} else resync_up=0;
+		} else {
+			if (startstop_up){
+				startstop_up=0;
+				ready_to_start_flag=0;
+				OFF(OUT_PORT1,2);
+			}
+		}
 
-
-		if (CLOCK_IN)
+		if (CLOCK_IN) {
 			ON_NOMUTE(CLOCK_LED_PORT,CLOCK_LED_pin);
-		else
+			if (!clockin_up){
+				clockin_up=1;
+				if (ready_to_start_flag){
+					ON_NOMUTE(OUT_PORT1,2); //turn on the Gate Out Jack and dinsync
+					ready_to_start_flag=0;
+				}
+			}	
+		} else {
+			clockin_up=0;
 			OFF(CLOCK_LED_PORT,CLOCK_LED_pin);
+		}
 
 
 
@@ -209,7 +221,7 @@ int main(void){
 		if (now>=per_x1){
 			got_internal_clock=1;
 		}
-	
+
 		if (got_internal_clock || (clockin_irq_timestamp && CLOCK_IN)){
 
 			/*	Clock IN received:
@@ -232,7 +244,7 @@ int main(void){
 			sei();
 
 			ON(OUT_PORT1,0);
-			ON(OUT_PORT1,3);
+			ON(OUT_PORT1,5); //this was ,3
 
 			got_internal_clock=0;
 			p1=0;p24=0;
@@ -246,8 +258,7 @@ int main(void){
 			if ((per_x24>min_pw) && (pw_x24<MIN_PW)) pw_x24=MIN_PW;
 
 			per_x24=div32_8(per_x1,24);
-			
-		}
+		}			
 
 
 
